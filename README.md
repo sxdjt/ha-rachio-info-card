@@ -30,20 +30,11 @@ Add this repository as a custom repository in HACS (type: Lovelace), then instal
 
 Get your Rachio API key from the Rachio app: **Account -> API Access**.
 
-**NOTE:** The `!secret` tag is only supported in file-based YAML dashboards. In the UI editor, paste the API key directly.
-
 ### Minimal
 
 ```yaml
 type: custom:rachio-card
 api_key: your-rachio-api-key
-```
-
-### With secrets (YAML dashboards only)
-
-```yaml
-type: custom:rachio-card
-api_key: !secret rachio_api_key
 ```
 
 ### All options
