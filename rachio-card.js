@@ -106,7 +106,9 @@ function formatShortDate(timestampMs) {
   try {
     const date = new Date(Number(timestampMs));
     if (isNaN(date.getTime())) return 'N/A';
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = date.toLocaleString(undefined, { month: 'short' });
+    return `${day} ${month}`;
   } catch {
     return 'N/A';
   }
@@ -155,6 +157,42 @@ function formatDuration(seconds) {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return secs > 0 ? `${minutes}m ${secs}s` : `${minutes}m`;
   return `${secs}s`;
+}
+
+/**
+ * Compute the next scheduled run date for a fixed schedule.
+ *
+ * The Rachio API does not provide a precomputed next-run timestamp. For
+ * INTERVAL_N schedules, the next run is derived from the schedule's startDate
+ * (the reference anchor) and the repeat interval in days.
+ *
+ * @param {object} schedule - Rachio scheduleRule object
+ * @returns {number|null} Unix timestamp (ms) of the next run, or null if
+ *   the schedule type is not supported or data is missing
+ */
+function computeNextRunDate(schedule) {
+  const jobTypes = schedule.scheduleJobTypes || [];
+
+  // Only handle INTERVAL_N types (e.g. "INTERVAL_3" = every 3 days)
+  const intervalType = jobTypes.find(t => /^INTERVAL_\d+$/.test(t));
+  if (!intervalType || !schedule.startDate) return null;
+
+  const intervalDays = parseInt(intervalType.split('_')[1], 10);
+  if (!intervalDays) return null;
+
+  const startMs = Number(schedule.startDate);
+  const nowMs = Date.now();
+
+  // Schedule hasn't started yet - next run is the start date itself
+  if (nowMs < startMs) return startMs;
+
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const daysSinceStart = Math.floor((nowMs - startMs) / msPerDay);
+  const daysIntoCycle = daysSinceStart % intervalDays;
+
+  // daysIntoCycle === 0 means today is a scheduled day
+  const daysUntilNext = daysIntoCycle === 0 ? 0 : (intervalDays - daysIntoCycle);
+  return nowMs + daysUntilNext * msPerDay;
 }
 
 // ---------------------------------------------------------------------------
@@ -1126,14 +1164,19 @@ class RachioCard extends HTMLElement {
         ? formatDuration(schedule.totalDuration)
         : null;
 
+      const nextRunMs = computeNextRunDate(schedule);
+      const nextRunLabel = nextRunMs ? `Next Scheduled Run: ${formatShortDate(nextRunMs)}` : null;
+
+      const metaParts = [duration, nextRunLabel].filter(Boolean);
+
       html += `
         <div class="schedule-row">
           <div class="schedule-left">
             <span class="schedule-name${isDisabled ? ' disabled' : ''}">
               ${escapeHtml(schedule.name || 'Schedule')}
             </span>
-            ${duration
-              ? `<span class="schedule-meta">${escapeHtml(duration)}</span>`
+            ${metaParts.length > 0
+              ? `<span class="schedule-meta">${escapeHtml(metaParts.join(' - '))}</span>`
               : ''}
           </div>
           <div class="schedule-right">
