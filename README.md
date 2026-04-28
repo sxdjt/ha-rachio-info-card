@@ -2,7 +2,7 @@
 
 A Home Assistant Lovelace card for Rachio irrigation controllers. Displays zone status, schedules, and watering history using the Rachio REST API directly - no Home Assistant Rachio integration required.
 
-[![AI Assisted](https://img.shields.io/badge/AI-Claude%20Code-AAAAAA.svg)](https://claude.ai/code)
+[![AI Assisted](https://img.shields.io/badge/AI-Claude%20Code-AAAAAA.svg?style=for-the-badge)](https://claude.ai/code)
 
 ## Features
 
