@@ -198,7 +198,7 @@ function createStyleElement() {
       display: block;
     }
     ha-card {
-      padding: 16px;
+      padding: 0 16px 16px;
       display: block;
     }
 
@@ -207,7 +207,8 @@ function createStyleElement() {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 16px;
+      padding: 10px 0 6px;
+      margin-bottom: 0;
       gap: 8px;
     }
     .card-title {
@@ -242,7 +243,7 @@ function createStyleElement() {
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--secondary-text-color);
-      margin: 20px 0 8px;
+      margin: 12px 0 8px;
       padding-bottom: 4px;
       border-bottom: 1px solid var(--divider-color);
     }
