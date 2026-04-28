@@ -47,6 +47,7 @@ update_interval: 60            # seconds between API polls, default: 60, min: 15
 history_days: 7                # days of history to show, default: 7, max: 90
 show_disabled_zones: false     # show disabled zones in the zone list, default: false
 show_disabled_schedules: false # show disabled schedules, default: false
+use_24h: true                  # 24-hour time display, default: true
 device_index: 0                # which controller to show (0 = first), default: 0
 ```
 

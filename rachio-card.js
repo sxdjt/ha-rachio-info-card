@@ -74,18 +74,21 @@ function escapeHtml(value) {
  * @param {number|string} timestampMs - Unix timestamp in milliseconds
  * @returns {string} Formatted string, or 'N/A' on failure
  */
-function formatDateTime(timestampMs) {
+function formatDateTime(timestampMs, hour12 = false) {
   if (!timestampMs) return 'N/A';
   try {
     const date = new Date(Number(timestampMs));
     if (isNaN(date.getTime())) return 'N/A';
-    return date.toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = date.toLocaleString(undefined, { month: 'short' });
+    if (hour12) {
+      // Locale handles AM/PM placement correctly
+      const time = date.toLocaleString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
+      return `${day} ${month} ${time}`;
+    }
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${day} ${month} ${hours}:${minutes}`;
   } catch {
     return 'N/A';
   }
@@ -202,80 +205,107 @@ function createStyleElement() {
       display: block;
     }
 
-    /* Card header: title on the left, controller name + status dot on the right */
+    /* Card header */
     .card-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 0 6px;
-      margin-bottom: 0;
+      padding: 10px 0 8px;
+      margin-bottom: 4px;
       gap: 8px;
+      border-bottom: 1px solid var(--divider-color);
     }
     .card-title {
-      font-size: 20px;
-      font-weight: 500;
+      font-size: 18px;
+      font-weight: 600;
       margin: 0;
+      letter-spacing: -0.02em;
       color: var(--primary-text-color);
     }
     .controller-info {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 13px;
+      font-size: 12px;
       color: var(--secondary-text-color);
       flex-shrink: 0;
     }
+
+    /* Online status dot - pulses when controller is online */
     .status-dot {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       flex-shrink: 0;
-      background: var(--disabled-color, #999);
+      background: var(--disabled-color, #888);
     }
     .status-dot.online {
       background: var(--success-color, #28a745);
     }
 
-    /* Section dividers */
+    /* Section headers */
     .section-header {
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--secondary-text-color);
-      margin: 12px 0 8px;
+      opacity: 0.65;
+      margin: 14px 0 4px;
       padding-bottom: 4px;
       border-bottom: 1px solid var(--divider-color);
     }
     .section-header:first-of-type {
-      margin-top: 0;
+      margin-top: 8px;
     }
 
-    /* ---- Zone rows ---- */
+    /* Zone rows */
     .zone-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 0;
-      border-bottom: 1px solid var(--divider-color);
+      padding: 7px 6px;
+      margin: 0 -6px;
+      border-bottom: 1px solid color-mix(in srgb, var(--divider-color) 55%, transparent);
       gap: 8px;
+      border-radius: 5px;
+      transition: background 0.12s ease;
     }
     .zone-row:last-child {
       border-bottom: none;
     }
+    .zone-row:hover {
+      background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
+    }
+    /* Running zone: inset left accent + subtle tint */
+    .zone-row.zone-running {
+      background: color-mix(in srgb, var(--success-color, #28a745) 8%, transparent);
+      box-shadow: inset 3px 0 0 var(--success-color, #28a745);
+    }
+    .zone-row.zone-running:hover {
+      background: color-mix(in srgb, var(--success-color, #28a745) 12%, transparent);
+    }
+
     .zone-left {
       display: flex;
       align-items: center;
       gap: 10px;
       min-width: 0;
     }
+    /* Zone number rendered as a small square pill */
     .zone-number {
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 10px;
+      font-weight: 700;
       color: var(--secondary-text-color);
       min-width: 18px;
-      text-align: right;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: color-mix(in srgb, var(--secondary-text-color) 12%, transparent);
+      border-radius: 4px;
       flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
     }
     .zone-name {
       font-size: 14px;
@@ -295,23 +325,40 @@ function createStyleElement() {
       flex-shrink: 0;
     }
     .zone-last-watered {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--secondary-text-color);
       text-align: right;
       white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.8;
+    }
+    .zone-duration {
+      font-size: 11px;
+      color: var(--secondary-text-color);
+      text-align: right;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.8;
+      min-width: 40px;
     }
 
-    /* ---- Schedule rows ---- */
+    /* Schedule rows */
     .schedule-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 0;
-      border-bottom: 1px solid var(--divider-color);
+      padding: 7px 6px;
+      margin: 0 -6px;
+      border-bottom: 1px solid color-mix(in srgb, var(--divider-color) 55%, transparent);
       gap: 8px;
+      border-radius: 5px;
+      transition: background 0.12s ease;
     }
     .schedule-row:last-child {
       border-bottom: none;
+    }
+    .schedule-row:hover {
+      background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
     }
     .schedule-left {
       display: flex;
@@ -328,8 +375,9 @@ function createStyleElement() {
       font-style: italic;
     }
     .schedule-meta {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--secondary-text-color);
+      opacity: 0.8;
     }
     .schedule-right {
       display: flex;
@@ -338,14 +386,16 @@ function createStyleElement() {
       flex-shrink: 0;
     }
 
-    /* ---- History rows ---- */
+    /* History rows */
     .history-row {
       display: flex;
       align-items: baseline;
       justify-content: space-between;
-      padding: 7px 0;
-      border-bottom: 1px solid var(--divider-color);
+      padding: 6px 6px;
+      margin: 0 -6px;
+      border-bottom: 1px solid color-mix(in srgb, var(--divider-color) 55%, transparent);
       gap: 8px;
+      border-radius: 5px;
     }
     .history-row:last-child {
       border-bottom: none;
@@ -361,89 +411,104 @@ function createStyleElement() {
       color: var(--primary-text-color);
     }
     .history-meta {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--secondary-text-color);
+      opacity: 0.8;
+      font-variant-numeric: tabular-nums;
     }
     .history-duration {
-      font-size: 12px;
-      font-weight: 500;
+      font-size: 11px;
+      font-weight: 600;
       color: var(--secondary-text-color);
       flex-shrink: 0;
     }
 
-    /* ---- Badges ---- */
+    /* Badges */
     .badge {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 2px 8px;
-      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
       white-space: nowrap;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
     }
     .badge-running {
-      background: var(--success-color, #28a745)22;
+      background: color-mix(in srgb, var(--success-color, #28a745) 15%, transparent);
       color: var(--success-color, #28a745);
-      border: 1px solid currentColor;
+      border: 1px solid color-mix(in srgb, var(--success-color, #28a745) 35%, transparent);
     }
     .badge-disabled {
-      background: var(--divider-color);
+      background: color-mix(in srgb, var(--secondary-text-color) 10%, transparent);
       color: var(--secondary-text-color);
+      opacity: 0.7;
     }
     .badge-fixed {
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 10px;
+      font-weight: 700;
       padding: 2px 6px;
       border-radius: 4px;
-      background: var(--primary-color)22;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      background: color-mix(in srgb, var(--primary-color) 14%, transparent);
       color: var(--primary-color);
     }
     .badge-flex {
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 10px;
+      font-weight: 700;
       padding: 2px 6px;
       border-radius: 4px;
-      background: var(--accent-color, #ff9800)22;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      background: color-mix(in srgb, var(--accent-color, #ff9800) 14%, transparent);
       color: var(--accent-color, #ff9800);
     }
 
-    /* ---- Collapsible section headers ---- */
+    /* Collapsible history toggle */
     .section-header-toggle {
       cursor: pointer;
       user-select: none;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      transition: opacity 0.12s ease;
     }
     .section-header-toggle:hover {
+      opacity: 1;
       color: var(--primary-color);
     }
     .toggle-chevron {
-      font-size: 10px;
-      opacity: 0.7;
+      font-size: 9px;
+      opacity: 0.55;
     }
 
-    /* ---- State messages ---- */
+    /* State messages */
     .no-data {
       font-size: 13px;
       color: var(--secondary-text-color);
       padding: 6px 0;
       font-style: italic;
+      opacity: 0.65;
     }
     .error-message {
-      padding: 12px;
-      border-radius: 4px;
+      padding: 10px 12px;
+      border-radius: 5px;
       color: var(--error-color, #dc3545);
-      background: var(--error-color, #dc3545)22;
-      font-size: 14px;
+      background: color-mix(in srgb, var(--error-color, #dc3545) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--error-color, #dc3545) 25%, transparent);
+      font-size: 13px;
       margin: 4px 0;
     }
     .loading-message {
-      font-size: 14px;
+      font-size: 13px;
       color: var(--secondary-text-color);
       padding: 8px 0;
+      opacity: 0.65;
     }
     .stale-indicator {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--warning-color, #ffc107);
+      opacity: 0.85;
     }
   `;
   return style;
@@ -634,6 +699,10 @@ class RachioCardEditor extends HTMLElement {
       'show_disabled_schedules', 'Show Disabled Schedules', this._config.show_disabled_schedules,
       'Include schedules marked disabled in the schedule list'
     ));
+    displayContent.appendChild(this._createSwitch(
+      'use_24h', '24-hour Clock', this._config.use_24h,
+      'Display times in 24-hour format instead of 12-hour AM/PM'
+    ));
     root.appendChild(this._createExpansionPanel('Display Options', displayContent));
 
     this.shadowRoot.innerHTML = '';
@@ -708,6 +777,7 @@ class RachioCard extends HTMLElement {
       history_days: DEFAULT_HISTORY_DAYS,
       show_disabled_zones: false,
       show_disabled_schedules: false,
+      use_24h: true,
       device_index: 0, // which device to display if the account has multiple controllers
       ...config
     };
@@ -936,16 +1006,19 @@ class RachioCard extends HTMLElement {
       const isDisabled = zone.enabled === false;
       const lastRun = lastWateredByZoneId.get(zone.id);
 
-      // Build the "last run" line: "Jan 5, 6:00 AM - 12m"
+      // Build the "last run" columns: datetime and duration rendered as separate
+      // flex items so they align independently across all zone rows.
       let lastRunHtml = '';
       if (lastRun && !isRunning) {
-        const dateStr = formatDateTime(lastRun.timestamp);
-        const durStr = lastRun.duration ? ` - ${formatDuration(lastRun.duration)}` : '';
-        lastRunHtml = `<span class="zone-last-watered">${escapeHtml(dateStr + durStr)}</span>`;
+        const dateStr = formatDateTime(lastRun.timestamp, !this._config.use_24h);
+        const durHtml = lastRun.duration
+          ? `<span class="zone-duration">${escapeHtml(formatDuration(lastRun.duration))}</span>`
+          : '';
+        lastRunHtml = `<span class="zone-last-watered">${escapeHtml(dateStr)}</span>${durHtml}`;
       }
 
       html += `
-        <div class="zone-row">
+        <div class="zone-row${isRunning ? ' zone-running' : ''}">
           <div class="zone-left">
             <span class="zone-number">${escapeHtml(zone.zoneNumber || '')}</span>
             <span class="zone-name${isDisabled ? ' disabled' : ''}">
@@ -1117,7 +1190,7 @@ class RachioCard extends HTMLElement {
         <div class="history-row">
           <div class="history-left">
             <span class="history-zone-name">${escapeHtml(summary)}</span>
-            <span class="history-meta">${escapeHtml(formatDateTime(eventTimeMs))}</span>
+            <span class="history-meta">${escapeHtml(formatDateTime(eventTimeMs, !this._config.use_24h))}</span>
           </div>
         </div>
       `;
