@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-04-28
+
+### Added
+
+- Play/stop button on each enabled zone row for manual zone control directly from the card
+- `default_run_minutes` config option: how long to run a zone when started manually (default: 10, max: 120)
+- Zones start via `PUT /public/zone/start`; stop via `PUT /public/device/stop_water`
+- Card automatically refreshes 10 seconds after a zone is started to allow the controller time to update
+
 ## [1.0.0] - 2026-04-28
 
 ### Added

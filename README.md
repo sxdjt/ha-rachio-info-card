@@ -13,6 +13,7 @@ This is a simple/basic card, nothing fancy.
 
 - Zone list with last watered date/time and duration per zone
 - Currently running zone highlighted with a "Running" badge
+- Play/stop button on each zone for manual control directly from the card
 - Schedule list with Fixed/Smart type badges and total duration
 - Collapsible watering history section
 - Online/offline status indicator for the controller
@@ -52,6 +53,7 @@ history_days: 7                # days of history to show, default: 7, max: 90
 show_disabled_zones: false     # show disabled zones in the zone list, default: false
 show_disabled_schedules: false # show disabled schedules, default: false
 use_24h: true                  # 24-hour time display, default: true
+default_run_minutes: 10        # how long to run a zone when started manually, default: 10, max: 120
 device_index: 0                # which controller to show (0 = first), default: 0
 ```
 

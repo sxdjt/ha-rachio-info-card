@@ -1,5 +1,5 @@
 /**
- * Rachio Card - v1.0.0
+ * Rachio Card - v1.1.0
  * Home Assistant Lovelace card for Rachio irrigation controllers.
  * Displays zone status, schedules, and watering history via the Rachio REST API.
  * https://github.com/sxdjt/ha-rachio-card
@@ -24,6 +24,12 @@ const MAX_HISTORY_EVENTS = 30;
 /** Fetch retry settings */
 const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 5000; // doubled each attempt (5s, 10s, 20s)
+
+/**
+ * Default run duration in minutes used when no default_run_minutes is set in config.
+ * The Rachio zone/start endpoint requires a duration; 10 minutes is a sensible default.
+ */
+const DEFAULT_RUN_MINUTES = 10;
 
 /**
  * Rachio event topic value for all watering-related events.
@@ -221,6 +227,34 @@ async function rachioGet(apiKey, path) {
   }
 
   return response.json();
+}
+
+/**
+ * Perform an authenticated PUT request to the Rachio REST API.
+ * Used for write operations such as starting or stopping a zone.
+ *
+ * @param {string} apiKey - Rachio API key used as Bearer token
+ * @param {string} path   - API path starting with '/', e.g. '/public/zone/start'
+ * @param {object} body   - Request body (serialised as JSON)
+ * @returns {Promise<object|null>} Parsed JSON response, or null for 204 No Content
+ */
+async function rachioPut(apiKey, path, body) {
+  const response = await fetch(`${RACHIO_API_BASE}${path}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Rachio API ${response.status}: ${response.statusText} (${path})`);
+  }
+
+  // zone/start and device/stop_water return 204 No Content on success
+  return response.status === 204 ? null : response.json().catch(() => null);
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +582,38 @@ function createStyleElement() {
       color: var(--warning-color, #ffc107);
       opacity: 0.85;
     }
+
+    /* Zone play/stop toggle button */
+    .zone-toggle-btn {
+      background: none;
+      border: 1px solid color-mix(in srgb, var(--secondary-text-color) 30%, transparent);
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 3px 6px;
+      color: var(--secondary-text-color);
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+    }
+    .zone-toggle-btn:hover {
+      background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+      color: var(--primary-color);
+      border-color: color-mix(in srgb, var(--primary-color) 50%, transparent);
+    }
+    .zone-toggle-btn.zone-toggle-stop {
+      color: var(--error-color, #dc3545);
+      border-color: color-mix(in srgb, var(--error-color, #dc3545) 40%, transparent);
+    }
+    .zone-toggle-btn.zone-toggle-stop:hover {
+      background: color-mix(in srgb, var(--error-color, #dc3545) 12%, transparent);
+    }
+    .zone-toggle-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
   `;
   return style;
 }
@@ -729,6 +795,10 @@ class RachioCardEditor extends HTMLElement {
       'history_days', 'History Days', this._config.history_days,
       'Days of watering history to show (default: 7, max: 90)', 'number'
     ));
+    displayContent.appendChild(this._createTextfield(
+      'default_run_minutes', 'Default Run Time (minutes)', this._config.default_run_minutes,
+      'How long to run a zone when started manually (default: 10, max: 120)', 'number'
+    ));
     displayContent.appendChild(this._createSwitch(
       'show_disabled_zones', 'Show Disabled Zones', this._config.show_disabled_zones,
       'Include zones marked disabled in the zone list'
@@ -789,6 +859,18 @@ class RachioCard extends HTMLElement {
     this.shadowRoot.appendChild(createStyleElement());
     this._content = document.createElement('ha-card');
     this.shadowRoot.appendChild(this._content);
+
+    // Delegated listener for zone play/stop buttons. Attached once here so it
+    // survives innerHTML replacements on each re-render.
+    this._content.addEventListener('click', (e) => {
+      const btn = e.target.closest('.zone-toggle-btn');
+      if (!btn || btn.disabled) return;
+      this._toggleZone(
+        btn.dataset.zoneId,
+        btn.dataset.deviceId,
+        btn.dataset.running === 'true'
+      );
+    });
   }
 
   set hass(hass) {
@@ -816,6 +898,7 @@ class RachioCard extends HTMLElement {
       show_disabled_zones: false,
       show_disabled_schedules: false,
       use_24h: true,
+      default_run_minutes: DEFAULT_RUN_MINUTES,
       device_index: 0, // which device to display if the account has multiple controllers
       ...config
     };
@@ -825,6 +908,9 @@ class RachioCard extends HTMLElement {
 
     // Clamp history_days to a reasonable range
     this._config.history_days = Math.max(1, Math.min(90, this._config.history_days));
+
+    // Clamp default_run_minutes to 1-120
+    this._config.default_run_minutes = Math.max(1, Math.min(120, this._config.default_run_minutes));
   }
 
   connectedCallback() {
@@ -1055,6 +1141,24 @@ class RachioCard extends HTMLElement {
         lastRunHtml = `<span class="zone-last-watered">${escapeHtml(dateStr)}</span>${durHtml}`;
       }
 
+      // Play icon (triangle) for idle zones, stop icon (square) for the running zone.
+      // Disabled zones get no button since the Rachio API will reject start requests for them.
+      const toggleBtnHtml = !isDisabled ? `
+        <button
+          class="zone-toggle-btn${isRunning ? ' zone-toggle-stop' : ''}"
+          title="${isRunning ? 'Stop zone' : 'Start zone'}"
+          data-zone-id="${escapeHtml(zone.id)}"
+          data-device-id="${escapeHtml(device.id)}"
+          data-running="${isRunning}"
+          aria-label="${isRunning ? 'Stop' : 'Start'} ${escapeHtml(zone.name || 'zone')}"
+        >
+          ${isRunning
+            ? '<svg viewBox="0 0 10 10" width="11" height="11"><rect x="1.5" y="1.5" width="7" height="7" fill="currentColor"/></svg>'
+            : '<svg viewBox="0 0 10 10" width="11" height="11"><polygon points="2,1 9,5 2,9" fill="currentColor"/></svg>'
+          }
+        </button>
+      ` : '';
+
       html += `
         <div class="zone-row${isRunning ? ' zone-running' : ''}">
           <div class="zone-left">
@@ -1064,6 +1168,7 @@ class RachioCard extends HTMLElement {
             </span>
           </div>
           <div class="zone-right">
+            ${toggleBtnHtml}
             ${isRunning ? '<span class="badge badge-running">Running</span>' : ''}
             ${isDisabled ? '<span class="badge badge-disabled">Disabled</span>' : ''}
             ${lastRunHtml}
@@ -1128,6 +1233,47 @@ class RachioCard extends HTMLElement {
     });
 
     return lastWatered;
+  }
+
+  /**
+   * Start or stop a zone via the Rachio API.
+   *
+   * Starting sends PUT /public/zone/start with a fixed run duration.
+   * Stopping sends PUT /public/device/stop_water (stops all zones on the device;
+   * only one zone can run at a time so this effectively stops the running zone).
+   *
+   * The clicked button is disabled while the request is in flight to prevent
+   * double-taps. On success, _loadData() is called to refresh the card state.
+   * On failure, the button is re-enabled and the error is logged to the console.
+   *
+   * @param {string} zoneId   - Rachio zone ID to start (ignored when stopping)
+   * @param {string} deviceId - Rachio device ID (used for stop_water endpoint)
+   * @param {boolean} isRunning - True if the zone is currently running (stop); false to start
+   */
+  async _toggleZone(zoneId, deviceId, isRunning) {
+    // Disable the button immediately to prevent double-taps while the request is in flight.
+    const btn = this._content.querySelector(`.zone-toggle-btn[data-zone-id="${zoneId}"]`);
+    if (btn) btn.disabled = true;
+
+    try {
+      if (isRunning) {
+        await rachioPut(this._config.api_key, '/public/device/stop_water', { id: deviceId });
+      } else {
+        await rachioPut(this._config.api_key, '/public/zone/start', {
+          id: zoneId,
+          duration: this._config.default_run_minutes * 60
+        });
+      }
+    } catch (err) {
+      console.error('Rachio Card: Zone toggle failed:', err);
+      // Re-enable the button so the user can retry.
+      if (btn) btn.disabled = false;
+      return;
+    }
+
+    // The Rachio controller takes a few seconds to start the zone before the
+    // current_schedule endpoint reflects the running state. Wait before refreshing.
+    setTimeout(() => this._loadData(), 10000);
   }
 
   /**
@@ -1287,9 +1433,9 @@ class RachioCard extends HTMLElement {
 customElements.define('rachio-card', RachioCard);
 
 console.info(
-  '%c RACHIO-CARD %c v1.0.0 ',
-  'color: white; background: #00a5c9; font-weight: 700;',
-  'color: white; background: #005f75; font-weight: 700;'
+  '%c RACHIO-CARD %c v1.1.0 ',
+  'color: black; background: #F2720C; font-weight: 600;',
+  'color: black; background: #00a5c9; font-weight: 600;'
 );
 
 window.customCards = window.customCards || [];
