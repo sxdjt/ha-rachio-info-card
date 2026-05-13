@@ -1,5 +1,5 @@
 /**
- * Rachio Card - v1.1.1
+ * Rachio Card - v1.1.2
  * Home Assistant Lovelace card for Rachio irrigation controllers.
  * Displays zone status, schedules, and watering history via the Rachio REST API.
  * https://github.com/sxdjt/ha-rachio-card
@@ -658,9 +658,11 @@ class RachioCardEditor extends HTMLElement {
   }
 
   set hass(hass) {
-    // Not used in this editor - no entity pickers needed.
-    // Stored in case a subclass or future version needs it.
     this._hass = hass;
+    // Propagate hass to all ha-selector elements (required for proper rendering)
+    this.shadowRoot?.querySelectorAll('ha-selector').forEach(s => {
+      s.hass = hass;
+    });
   }
 
   /** Dispatch the config-changed event so HA updates the card preview. */
@@ -687,29 +689,31 @@ class RachioCardEditor extends HTMLElement {
     this._fireConfigChanged();
   }
 
-  /** Build a labeled ha-textfield wrapped in a .field div. */
+  /** Build a labeled ha-selector wrapped in a .field div. */
   _createTextfield(field, label, value, helperText, type = 'text') {
     const container = document.createElement('div');
     container.className = 'field';
 
-    const textfield = document.createElement('ha-textfield');
-    textfield.label = label;
-    textfield.value = value ?? '';
-    if (type === 'number') textfield.type = 'number';
-    if (helperText) {
-      textfield.helperPersistent = true;
-      textfield.helper = helperText;
+    const selector = document.createElement('ha-selector');
+    selector.hass = this._hass;
+    selector.label = label;
+    if (type === 'number') {
+      selector.selector = { number: { mode: 'box', step: 1 } };
+    } else {
+      selector.selector = { text: {} };
     }
+    selector.value = value ?? '';
 
-    textfield.addEventListener('input', (e) => {
-      const raw = e.target.value;
+    selector.addEventListener('value-changed', (e) => {
+      e.stopPropagation();
+      const raw = e.detail.value;
       const newValue = type === 'number'
         ? (raw === '' ? undefined : Number(raw))
         : raw;
       this._valueChanged(field, newValue);
     });
 
-    container.appendChild(textfield);
+    container.appendChild(selector);
     return container;
   }
 
@@ -756,7 +760,7 @@ class RachioCardEditor extends HTMLElement {
     style.textContent = `
       :host { display: block; padding: 16px; }
       .field { display: block; margin-bottom: 16px; }
-      .field ha-textfield { display: block; width: 100%; }
+      .field ha-selector { display: block; width: 100%; }
       ha-expansion-panel { display: block; margin-bottom: 8px; }
       .panel-content { padding: 12px; }
       .section-note {
@@ -1461,7 +1465,7 @@ class RachioCard extends HTMLElement {
 customElements.define('rachio-card', RachioCard);
 
 console.info(
-  '%c RACHIO-CARD %c v1.1.1 ',
+  '%c RACHIO-CARD %c v1.1.2 ',
   'color: black; background: #F2720C; font-weight: 600;',
   'color: black; background: #00a5c9; font-weight: 600;'
 );
