@@ -1,5 +1,5 @@
 /**
- * Rachio Card - v1.1.2
+ * Rachio Card - v1.1.3
  * Home Assistant Lovelace card for Rachio irrigation controllers.
  * Displays zone status, schedules, and watering history via the Rachio REST API.
  * https://github.com/sxdjt/ha-rachio-card
@@ -163,55 +163,6 @@ function formatDuration(seconds) {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return secs > 0 ? `${minutes}m ${secs}s` : `${minutes}m`;
   return `${secs}s`;
-}
-
-/**
- * Compute the next scheduled run date for a fixed schedule.
- *
- * The Rachio API does not provide a precomputed next-run timestamp. For
- * INTERVAL_N schedules, the next run is derived from the schedule's startDate
- * (the reference anchor) and the repeat interval in days.
- *
- * @param {object} schedule - Rachio scheduleRule object
- * @returns {number|null} Unix timestamp (ms) of the next run, or null if
- *   the schedule type is not supported or data is missing
- */
-function computeNextRunDate(schedule, lastRunMs = null) {
-  const jobTypes = schedule.scheduleJobTypes || [];
-
-  // Only handle INTERVAL_N types (e.g. "INTERVAL_3" = every 3 days)
-  const intervalType = jobTypes.find(t => /^INTERVAL_\d+$/.test(t));
-  if (!intervalType) return null;
-
-  const intervalDays = parseInt(intervalType.split('_')[1], 10);
-  if (!intervalDays) return null;
-
-  const msPerDay = 24 * 60 * 60 * 1000;
-
-  // Prefer anchoring off the last actual run date rather than startDate.
-  // startDate is the original schedule creation anchor and does not update
-  // when Rachio delays a run (e.g. due to rain hold), causing drift.
-  if (lastRunMs) {
-    return lastRunMs + intervalDays * msPerDay;
-  }
-
-  // Fall back to startDate-based calculation when no history is available.
-  if (!schedule.startDate) return null;
-
-  const startMs = Number(schedule.startDate);
-  const nowMs = Date.now();
-
-  // Schedule hasn't started yet - next run is the start date itself
-  if (nowMs < startMs) return startMs;
-
-  const daysSinceStart = Math.floor((nowMs - startMs) / msPerDay);
-  const daysIntoCycle = daysSinceStart % intervalDays;
-
-  // When daysIntoCycle === 0, today is a cycle day but we cannot tell whether
-  // the schedule has already run today. Always advance to the next interval to
-  // avoid showing a stale "today" after the run has already completed.
-  const daysUntilNext = daysIntoCycle === 0 ? intervalDays : (intervalDays - daysIntoCycle);
-  return nowMs + daysUntilNext * msPerDay;
 }
 
 // ---------------------------------------------------------------------------
@@ -1098,7 +1049,7 @@ class RachioCard extends HTMLElement {
     const lastWateredByZoneId = this._buildLastWateredMap(device.zones || []);
 
     html += this._renderZonesSection(device, lastWateredByZoneId);
-    html += this._renderSchedulesSection(device, lastWateredByZoneId);
+    html += this._renderSchedulesSection(device);
     html += this._renderHistorySection(zoneNameById);
 
     this._content.innerHTML = html;
@@ -1299,7 +1250,7 @@ class RachioCard extends HTMLElement {
    * @param {object} device - Rachio device object
    * @returns {string} HTML string
    */
-  _renderSchedulesSection(device, lastWateredByZoneId) {
+  _renderSchedulesSection(device) {
     // Merge fixed and flex schedules into one list with a type tag
     const fixedSchedules = (device.scheduleRules || []).map(s => ({ ...s, _type: 'FIXED' }));
     const flexSchedules = (device.flexScheduleRules || []).map(s => ({ ...s, _type: 'FLEX' }));
@@ -1325,27 +1276,7 @@ class RachioCard extends HTMLElement {
         ? formatDuration(schedule.totalDuration)
         : null;
 
-      // Derive last actual run time from the most recent zone-complete event
-      // across all zones belonging to this schedule. Rachio's startDate is the
-      // original creation anchor and does not update when runs are delayed
-      // (e.g. rain hold), so using zone history avoids drift.
-      const scheduleZones = schedule.zones || [];
-      let scheduleLastRunMs = null;
-      for (const zoneEntry of scheduleZones) {
-        const zoneId = zoneEntry.zoneId || zoneEntry.id;
-        if (!zoneId) continue;
-        const record = lastWateredByZoneId.get(zoneId);
-        if (record && record.timestamp) {
-          if (!scheduleLastRunMs || record.timestamp > scheduleLastRunMs) {
-            scheduleLastRunMs = record.timestamp;
-          }
-        }
-      }
-
-      const nextRunMs = computeNextRunDate(schedule, scheduleLastRunMs);
-      const nextRunLabel = nextRunMs ? `Next Scheduled Run: ${formatShortDate(nextRunMs)}` : null;
-
-      const metaParts = [duration, nextRunLabel].filter(Boolean);
+      const metaParts = [duration].filter(Boolean);
 
       html += `
         <div class="schedule-row">
@@ -1465,7 +1396,7 @@ class RachioCard extends HTMLElement {
 customElements.define('rachio-card', RachioCard);
 
 console.info(
-  '%c RACHIO-CARD %c v1.1.2 ',
+  '%c RACHIO-CARD %c v1.1.3 ',
   'color: black; background: #F2720C; font-weight: 600;',
   'color: black; background: #00a5c9; font-weight: 600;'
 );
