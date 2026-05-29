@@ -1,5 +1,5 @@
 /**
- * Rachio Card - v1.1.3
+ * Rachio Card - v1.2.0
  * Home Assistant Lovelace card for Rachio irrigation controllers.
  * Displays zone status, schedules, and watering history via the Rachio REST API.
  * https://github.com/sxdjt/ha-rachio-card
@@ -44,15 +44,33 @@ const WATERING_TOPIC = 'WATERING';
 const ZONE_EVENT_TYPE = 'ZONE_STATUS';
 
 /**
- * Event subtypes that indicate a watering run ended (zone or schedule level).
- * ZONE_COMPLETED / ZONE_STOPPED       = zone finished or was manually stopped.
- * SCHEDULE_COMPLETED / SCHEDULE_STOPPED = full schedule finished or was stopped.
+ * Zone-level watering-end subtypes (ZONE_COMPLETED = run finished;
+ * ZONE_STOPPED = manually halted). Used by _buildLastWateredMap, which
+ * pairs each completed run with a zone via the event summary string.
  */
-const WATERING_COMPLETE_SUBTYPES = new Set([
+const ZONE_WATERING_COMPLETE_SUBTYPES = new Set([
   'ZONE_COMPLETED',
-  'ZONE_STOPPED',
+  'ZONE_STOPPED'
+]);
+
+/**
+ * Schedule-level watering-end subtypes (SCHEDULE_COMPLETED = whole schedule
+ * finished; SCHEDULE_STOPPED = manually halted). Schedule events carry
+ * roll-up summaries rather than per-zone data.
+ */
+const SCHEDULE_WATERING_COMPLETE_SUBTYPES = new Set([
   'SCHEDULE_COMPLETED',
   'SCHEDULE_STOPPED'
+]);
+
+/**
+ * Union of both watering-end subtype sets. Used by the history view, which
+ * lists every completed run regardless of whether it was a single-zone manual
+ * run or part of a schedule.
+ */
+const WATERING_COMPLETE_SUBTYPES = new Set([
+  ...ZONE_WATERING_COMPLETE_SUBTYPES,
+  ...SCHEDULE_WATERING_COMPLETE_SUBTYPES
 ]);
 
 // ---------------------------------------------------------------------------
@@ -70,7 +88,9 @@ function escapeHtml(value) {
   if (value == null) return '';
   const div = document.createElement('div');
   div.textContent = String(value);
-  return div.innerHTML;
+  // div.innerHTML encodes <, >, & but not " -- encode quotes so this function
+  // is safe in HTML attribute contexts as well as text content.
+  return div.innerHTML.replace(/"/g, '&quot;');
 }
 
 /**
@@ -95,26 +115,6 @@ function formatDateTime(timestampMs, hour12 = false) {
     const hours = date.getHours().toString().padStart(2, '0');
     const minutes = date.getMinutes().toString().padStart(2, '0');
     return `${day} ${month} ${hours}:${minutes}`;
-  } catch {
-    return 'N/A';
-  }
-}
-
-/**
- * Format a Unix timestamp (milliseconds) as a short date string.
- * E.g., "Jan 5". Used for the "last watered" label on zones.
- *
- * @param {number} timestampMs - Unix timestamp in milliseconds
- * @returns {string} Formatted string, or 'N/A' on failure
- */
-function formatShortDate(timestampMs) {
-  if (!timestampMs) return 'N/A';
-  try {
-    const date = new Date(Number(timestampMs));
-    if (isNaN(date.getTime())) return 'N/A';
-    const day = date.getDate().toString().padStart(2, '0');
-    const month = date.toLocaleString(undefined, { month: 'short' });
-    return `${day} ${month}`;
   } catch {
     return 'N/A';
   }
@@ -513,9 +513,23 @@ function createStyleElement() {
       opacity: 1;
       color: var(--primary-color);
     }
+    /* Keyboard focus ring for users navigating via Tab. */
+    .section-header-toggle:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
     .toggle-chevron {
       font-size: 9px;
       opacity: 0.55;
+    }
+
+    /* "Updated HH:MM" badge in the header */
+    .last-updated {
+      font-size: 11px;
+      color: var(--secondary-text-color);
+      opacity: 0.7;
+      font-variant-numeric: tabular-nums;
     }
 
     /* State messages */
@@ -640,7 +654,15 @@ class RachioCardEditor extends HTMLElement {
     this._fireConfigChanged();
   }
 
-  /** Build a labeled ha-selector wrapped in a .field div. */
+  /**
+   * Build a labeled ha-selector wrapped in a .field div.
+   *
+   * @param {string} field        - Config key this field writes to
+   * @param {string} label        - Visible label
+   * @param {*}      value        - Current value
+   * @param {string} [helperText] - Optional helper text rendered below the field
+   * @param {('text'|'number'|'password')} [type='text'] - Selector variant
+   */
   _createTextfield(field, label, value, helperText, type = 'text') {
     const container = document.createElement('div');
     container.className = 'field';
@@ -650,6 +672,9 @@ class RachioCardEditor extends HTMLElement {
     selector.label = label;
     if (type === 'number') {
       selector.selector = { number: { mode: 'box', step: 1 } };
+    } else if (type === 'password') {
+      // Mask sensitive fields (e.g. API keys) so the value isn't visible on screen.
+      selector.selector = { text: { type: 'password' } };
     } else {
       selector.selector = { text: {} };
     }
@@ -665,6 +690,14 @@ class RachioCardEditor extends HTMLElement {
     });
 
     container.appendChild(selector);
+
+    if (helperText) {
+      const helper = document.createElement('div');
+      helper.className = 'field-helper';
+      helper.textContent = helperText;
+      container.appendChild(helper);
+    }
+
     return container;
   }
 
@@ -712,6 +745,11 @@ class RachioCardEditor extends HTMLElement {
       :host { display: block; padding: 16px; }
       .field { display: block; margin-bottom: 16px; }
       .field ha-selector { display: block; width: 100%; }
+      .field-helper {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        margin-top: 4px;
+      }
       ha-expansion-panel { display: block; margin-bottom: 8px; }
       .panel-content { padding: 12px; }
       .section-note {
@@ -744,7 +782,8 @@ class RachioCardEditor extends HTMLElement {
     basicSection.innerHTML = '<h3>Required Settings</h3>';
     basicSection.appendChild(this._createTextfield(
       'api_key', 'Rachio API Key', this._config.api_key,
-      'Found in the Rachio app under Account Settings. In YAML mode you can use !secret rachio_api_key.'
+      'Found in the Rachio app under Account Settings. In YAML mode you can use !secret rachio_api_key.',
+      'password'
     ));
     basicSection.appendChild(this._createTextfield(
       'title', 'Card Title', this._config.title,
@@ -813,11 +852,21 @@ class RachioCard extends HTMLElement {
     this._hass = null;     // Available but unused - card calls Rachio directly
     this._interval = null; // setInterval handle for periodic refresh
     this._retryCount = 0;
+    this._retryTimer = null;          // setTimeout handle for the next retry attempt
+    this._toggleRefreshTimer = null;  // setTimeout handle for the post-zone-toggle refresh
+    this._loadInFlight = false;       // guard against overlapping _loadData calls
 
     // Cached API data, updated on each successful fetch
     this._deviceData = null;
     this._currentSchedule = null;
     this._historyEvents = [];
+    // Derived from _historyEvents + _deviceData.zones; rebuilt only when those
+    // change so re-renders (e.g. expanding the history section) don't re-scan
+    // the whole event list.
+    this._lastWateredByZoneId = new Map();
+    // Wall-clock time (ms) of the last successful fetch; shown in the header so
+    // users can tell at a glance whether the card is still updating.
+    this._lastLoadedAt = null;
 
     // UI state preserved across re-renders
     this._historyExpanded = false; // history section starts collapsed
@@ -839,6 +888,17 @@ class RachioCard extends HTMLElement {
         btn.dataset.running === 'true'
       );
     });
+
+    // Pause polling when the tab is backgrounded; resume (and immediately
+    // refresh) when it becomes visible. Bound once so addEventListener and
+    // removeEventListener reference the same function.
+    this._handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        this._stopPolling();
+      } else {
+        this._startPolling();
+      }
+    };
   }
 
   set hass(hass) {
@@ -884,10 +944,12 @@ class RachioCard extends HTMLElement {
   connectedCallback() {
     this._renderLoading();
     this._startPolling();
+    document.addEventListener('visibilitychange', this._handleVisibilityChange);
   }
 
   disconnectedCallback() {
     this._stopPolling();
+    document.removeEventListener('visibilitychange', this._handleVisibilityChange);
   }
 
   _startPolling() {
@@ -904,6 +966,16 @@ class RachioCard extends HTMLElement {
       clearInterval(this._interval);
       this._interval = null;
     }
+    // Cancel any pending retry / post-toggle refresh so they don't fire on a
+    // detached element after disconnectedCallback.
+    if (this._retryTimer) {
+      clearTimeout(this._retryTimer);
+      this._retryTimer = null;
+    }
+    if (this._toggleRefreshTimer) {
+      clearTimeout(this._toggleRefreshTimer);
+      this._toggleRefreshTimer = null;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -918,6 +990,13 @@ class RachioCard extends HTMLElement {
    * If retries are exhausted and cached data exists, renders stale data.
    */
   async _loadData() {
+    // Guard against overlapping fetches: a polling tick firing while a previous
+    // fetch (or scheduled retry) is still in flight would mutate shared state
+    // (_deviceData, _historyEvents, _retryCount) concurrently. Skip the
+    // duplicate call - the in-flight fetch will produce a fresh render itself.
+    if (this._loadInFlight) return;
+    this._loadInFlight = true;
+
     try {
       // Step 1: Resolve person ID from the authenticated API key
       const personInfo = await rachioGet(this._config.api_key, '/public/person/info');
@@ -968,6 +1047,9 @@ class RachioCard extends HTMLElement {
         console.warn('Rachio Card: History fetch failed:', historyResult.reason);
       }
 
+      // Refresh derived caches now that the underlying data has changed.
+      this._lastWateredByZoneId = this._buildLastWateredMap(device.zones || []);
+      this._lastLoadedAt = Date.now();
 
       this._retryCount = 0;
 
@@ -980,7 +1062,11 @@ class RachioCard extends HTMLElement {
         this._retryCount++;
         const delayMs = BASE_RETRY_DELAY_MS * Math.pow(2, this._retryCount - 1);
         console.log(`Rachio Card: Retry ${this._retryCount}/${MAX_RETRIES} in ${delayMs / 1000}s`);
-        setTimeout(() => this._loadData(), delayMs);
+        // Store the handle so disconnectedCallback can cancel it.
+        this._retryTimer = setTimeout(() => {
+          this._retryTimer = null;
+          this._loadData();
+        }, delayMs);
       } else {
         // Retries exhausted - show stale data if we have it, otherwise show error
         if (this._deviceData) {
@@ -990,6 +1076,8 @@ class RachioCard extends HTMLElement {
           this._renderError(`Unable to load Rachio data: ${err.message}`);
         }
       }
+    } finally {
+      this._loadInFlight = false;
     }
   }
 
@@ -1028,13 +1116,21 @@ class RachioCard extends HTMLElement {
     const staleMark = stale
       ? '<span class="stale-indicator"> (stale)</span>'
       : '';
+    // Wall-clock time of the last successful fetch, formatted in the user's
+    // locale. Rendered as a small "Updated HH:MM" badge so users have feedback
+    // that the card is still polling.
+    const updatedAtHtml = this._lastLoadedAt
+      ? `<span class="last-updated">Updated ${escapeHtml(this._formatUpdatedTime(this._lastLoadedAt))}</span>`
+      : '';
 
     let html = `
       <div class="card-header">
         <h2 class="card-title">${escapeHtml(this._config.title)}</h2>
         <div class="controller-info">
-          <div class="status-dot ${isOnline ? 'online' : ''}"></div>
+          <div class="status-dot ${isOnline ? 'online' : ''}"
+               title="${isOnline ? 'Online' : 'Offline'}"></div>
           <span>${escapeHtml(device.name || 'Controller')}</span>
+          ${updatedAtHtml}
           ${staleMark}
         </div>
       </div>
@@ -1045,10 +1141,9 @@ class RachioCard extends HTMLElement {
       (device.zones || []).map(zone => [zone.id, zone.name || 'Zone'])
     );
 
-    // Build once and share: both zones and schedules need last-watered data.
-    const lastWateredByZoneId = this._buildLastWateredMap(device.zones || []);
-
-    html += this._renderZonesSection(device, lastWateredByZoneId);
+    // Cached on the instance by _loadData; re-renders for the history toggle
+    // reuse it instead of rescanning the event list.
+    html += this._renderZonesSection(device, this._lastWateredByZoneId, isOnline);
     html += this._renderSchedulesSection(device);
     html += this._renderHistorySection(zoneNameById);
 
@@ -1057,11 +1152,36 @@ class RachioCard extends HTMLElement {
     // Attach toggle listener after innerHTML is set, since the element is recreated each render.
     const historyToggle = this._content.querySelector('.history-toggle');
     if (historyToggle) {
-      historyToggle.addEventListener('click', () => {
+      const toggleHistory = () => {
         this._historyExpanded = !this._historyExpanded;
         this._renderCard(this._isStale);
+      };
+      historyToggle.addEventListener('click', toggleHistory);
+      // Keyboard support: Enter / Space activate the toggle (the element has
+      // role="button" and tabindex="0" so screen readers treat it as actionable).
+      historyToggle.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggleHistory();
+        }
       });
     }
+  }
+
+  /**
+   * Format a wall-clock timestamp for the header "Updated ..." badge.
+   * Honours the user's use_24h preference.
+   *
+   * @param {number} timestampMs - Unix timestamp in milliseconds
+   * @returns {string} HH:MM (24h) or H:MM AM/PM (12h)
+   */
+  _formatUpdatedTime(timestampMs) {
+    const date = new Date(timestampMs);
+    return date.toLocaleString(undefined, {
+      hour: this._config.use_24h ? '2-digit' : 'numeric',
+      minute: '2-digit',
+      hour12: !this._config.use_24h
+    });
   }
 
   /**
@@ -1071,9 +1191,12 @@ class RachioCard extends HTMLElement {
    * watered date, derived from the event history.
    *
    * @param {object} device - Rachio device object
+   * @param {Map}    lastWateredByZoneId - Cached zone-id -> { timestamp, duration }
+   * @param {boolean} isOnline - Whether the controller is currently reachable;
+   *   used to disable the play/stop buttons when the API would reject the call.
    * @returns {string} HTML string
    */
-  _renderZonesSection(device, lastWateredByZoneId) {
+  _renderZonesSection(device, lastWateredByZoneId, isOnline) {
     const allZones = (device.zones || []).filter(zone => {
       // Optionally hide disabled zones based on config
       return this._config.show_disabled_zones || zone.enabled !== false;
@@ -1109,14 +1232,27 @@ class RachioCard extends HTMLElement {
 
       // Play icon (triangle) for idle zones, stop icon (square) for the running zone.
       // Disabled zones get no button since the Rachio API will reject start requests for them.
+      //
+      // The stop action hits /public/device/stop_water, which halts ALL watering
+      // on the controller (including any remaining zones in an active schedule).
+      // The label reflects that scope so users aren't surprised when a queued
+      // schedule run ends too.
+      const stopLabel = 'Stop watering';
+      const startLabel = `Start ${zone.name || 'zone'}`;
+      const offlineLabel = 'Controller is offline';
+      // Disable the button (and swap the tooltip) when the controller is
+      // offline - the Rachio API rejects start/stop calls in that state, so
+      // the click would silently fail otherwise.
+      const buttonLabel = !isOnline ? offlineLabel : (isRunning ? stopLabel : startLabel);
       const toggleBtnHtml = !isDisabled ? `
         <button
           class="zone-toggle-btn${isRunning ? ' zone-toggle-stop' : ''}"
-          title="${isRunning ? 'Stop zone' : 'Start zone'}"
+          title="${escapeHtml(buttonLabel)}"
           data-zone-id="${escapeHtml(zone.id)}"
           data-device-id="${escapeHtml(device.id)}"
           data-running="${isRunning}"
-          aria-label="${isRunning ? 'Stop' : 'Start'} ${escapeHtml(zone.name || 'zone')}"
+          aria-label="${escapeHtml(buttonLabel)}"
+          ${!isOnline ? 'disabled' : ''}
         >
           ${isRunning
             ? '<svg viewBox="0 0 10 10" width="11" height="11"><rect x="1.5" y="1.5" width="7" height="7" fill="currentColor"/></svg>'
@@ -1172,8 +1308,11 @@ class RachioCard extends HTMLElement {
     const lastWatered = new Map();
 
     this._historyEvents.forEach(event => {
+      // Filter on `event.type` (not `event.topic`) so we only see zone-level
+      // events - the summary on a schedule-level event is a roll-up that
+      // can't be matched back to a single zone.
       if (event.type !== ZONE_EVENT_TYPE) return;
-      if (!WATERING_COMPLETE_SUBTYPES.has(event.subType)) return;
+      if (!ZONE_WATERING_COMPLETE_SUBTYPES.has(event.subType)) return;
       if (!event.summary || !event.eventDate) return;
 
       // Find which zone this event belongs to by checking if the summary starts
@@ -1239,7 +1378,12 @@ class RachioCard extends HTMLElement {
 
     // The Rachio controller takes a few seconds to start the zone before the
     // current_schedule endpoint reflects the running state. Wait before refreshing.
-    setTimeout(() => this._loadData(), 10000);
+    // Store the handle so disconnectedCallback can cancel it if the card unmounts
+    // before the refresh fires.
+    this._toggleRefreshTimer = setTimeout(() => {
+      this._toggleRefreshTimer = null;
+      this._loadData();
+    }, 10000);
   }
 
   /**
@@ -1310,6 +1454,29 @@ class RachioCard extends HTMLElement {
    * @returns {string} HTML string
    */
   _renderHistorySection(zoneNameById) {
+    const chevron = this._historyExpanded ? '&#9650;' : '&#9660;';
+    const ariaLabel = this._historyExpanded ? 'Collapse history' : 'Expand history';
+    // role="button" + tabindex make this <div> activatable for screen readers
+    // and keyboard users. The chevron is purely decorative; aria-hidden keeps
+    // it out of the accessible name.
+    let html = `
+      <div class="section-header section-header-toggle history-toggle"
+           role="button"
+           tabindex="0"
+           aria-expanded="${this._historyExpanded}"
+           aria-label="${escapeHtml(ariaLabel)}">
+        <span>History (last ${escapeHtml(this._config.history_days)} days)</span>
+        <span class="toggle-chevron" aria-hidden="true">${chevron}</span>
+      </div>
+    `;
+
+    // History is collapsed by default; skip the filter/sort/slice work entirely
+    // until the user expands it.
+    if (!this._historyExpanded) return html;
+
+    // Filter on `event.topic` (not `event.type`) so the history view picks up
+    // both zone- and schedule-level events; the user wants to see every
+    // completed run regardless of how it was triggered.
     const wateringEvents = this._historyEvents
       .filter(event =>
         event.topic === WATERING_TOPIC &&
@@ -1317,16 +1484,6 @@ class RachioCard extends HTMLElement {
       )
       .sort((a, b) => new Date(b.eventDate) - new Date(a.eventDate))
       .slice(0, MAX_HISTORY_EVENTS);
-
-    const chevron = this._historyExpanded ? '&#9650;' : '&#9660;';
-    let html = `
-      <div class="section-header section-header-toggle history-toggle">
-        <span>History (last ${escapeHtml(this._config.history_days)} days)</span>
-        <span class="toggle-chevron">${chevron}</span>
-      </div>
-    `;
-
-    if (!this._historyExpanded) return html;
 
     if (wateringEvents.length === 0) {
       return html + '<div class="no-data">No watering events in this period.</div>';
@@ -1396,7 +1553,7 @@ class RachioCard extends HTMLElement {
 customElements.define('rachio-card', RachioCard);
 
 console.info(
-  '%c RACHIO-CARD %c v1.1.3 ',
+  '%c RACHIO-CARD %c v1.2.0 ',
   'color: black; background: #F2720C; font-weight: 600;',
   'color: black; background: #00a5c9; font-weight: 600;'
 );

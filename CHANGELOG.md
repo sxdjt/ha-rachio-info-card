@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-05-29
+
+### Added
+
+- "Updated HH:MM" badge in the card header showing the time of the last successful fetch (honours `use_24h`)
+- History toggle is now keyboard-activatable (Enter/Space) and exposes `role="button"`, `aria-expanded`, and an `aria-label` for screen readers
+- Play/stop buttons are disabled with an explanatory tooltip when the Rachio controller is offline
+- Online/offline tooltip on the controller status dot
+- Visual editor masks the Rachio API key as a password field and renders the helper text under each input
+
+### Changed
+
+- Stop button label is now "Stop watering" - `/public/device/stop_water` halts ALL watering on the controller (including queued zones in a schedule), and the label now matches that scope
+- Polling pauses while the dashboard tab is hidden and resumes (with an immediate refresh) when it becomes visible again
+- History section skips its filter/sort/slice work while collapsed
+- Last-watered-per-zone map is cached on the instance and only rebuilt when the underlying data changes
+
+### Fixed
+
+- Race condition where a polling tick firing during an in-flight retry could mutate shared state concurrently; `_loadData` now de-duplicates concurrent calls
+- Pending retry and post-zone-toggle refresh timers were not cleared on `disconnectedCallback` and could fire on a detached card; they are now tracked and cancelled on disconnect
+- `escapeHtml` now also encodes `"` so the function is safe in HTML attribute contexts
+
+### Removed
+
+- Unused `formatShortDate` utility
+
 ## [1.1.3] - 2026-05-17
 
 ### Removed
