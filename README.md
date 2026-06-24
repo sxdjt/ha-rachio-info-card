@@ -21,15 +21,9 @@ This is a simple/basic card, nothing fancy.
 
 ## Installation
 
-### Manual
-
 1. Download `rachio-card.js` and copy it to `/config/www/rachio-card.js` on your Home Assistant instance.
 2. Go to **Settings -> Dashboards -> Resources** and add `/local/rachio-card.js` as a JavaScript module.
 3. Hard-refresh your browser.
-
-### HACS
-
-Add this repository as a custom repository in HACS (type: Lovelace), then install via the HACS UI.
 
 ## Configuration
 

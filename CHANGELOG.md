@@ -74,6 +74,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `device_index` config option for multi-controller setups
 - `history_days` config option (1-90 days)
 - Visual editor support in the Lovelace UI
-- HACS installation support
 - Graceful degradation: renders cached data on API failure with stale indicator
 - XSS protection on all API-sourced strings
